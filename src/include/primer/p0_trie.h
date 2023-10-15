@@ -334,6 +334,7 @@ class Trie {
     size_t count = 0;
     size_t str_len = key.size();
     unique_ptr<TrieNode> *node_ptr = &root_;
+    latch_.WLock();
     for (auto ch : key) {
       count++;
       if (count < str_len)
@@ -347,9 +348,11 @@ class Trie {
         unique_ptr<TrieNode> *end_node_ptr = node_ptr->get()->GetChildNode(ch);
         if (end_node_ptr == nullptr) {
           node_ptr->get()->InsertChildNode(ch, std::make_unique<TrieNodeWithValue<T>>(ch, value));
+          latch_.WUnlock();
           return true;
         }
         if (end_node_ptr->get()->IsEndNode()) {
+          latch_.WUnlock();
           return false;
         } else {
           // 这里为什么是TrieNodeWithValue<T>，需要看一下泛型的相关知识
@@ -357,10 +360,12 @@ class Trie {
           auto new_node_ptr = new TrieNodeWithValue<T>(move(*(node_ptr->get())), value);
           // 会自动释放智能指针指向的内存
           node_ptr->reset(new_node_ptr);
+          latch_.WUnlock();
           return true;
         }
       }
     }
+    latch_.WUnlock();
     assert(false);
     // 上述应该包含所有情况，不应该走到这里
     return false;
@@ -411,7 +416,10 @@ class Trie {
 
   bool Remove(const std::string &key) 
   {
-    return RemoveChildFromTrieNode(&root_, key, 0);
+    latch_.WLock();
+    bool res = RemoveChildFromTrieNode(&root_, key, 0);
+    latch_.WUnlock();
+    return res;
   }
 
   /**
@@ -440,19 +448,24 @@ class Trie {
     }
     unique_ptr<TrieNode> *node_ptr = &root_;
     size_t index = 0;
+    latch_.RLock();
     for (auto ch : key) {
       node_ptr = node_ptr->get()->GetChildNode(ch);
       if (node_ptr == nullptr) {
         *success = false;
+        latch_.RUnlock();
         return {};
       }
       if (index == key.size() - 1) {
         auto term_node_ptr = dynamic_cast<TrieNodeWithValue<T> *>(node_ptr->get());
         if (term_node_ptr != nullptr) {
           *success = true;
-          return term_node_ptr->GetValue();
+          T result = term_node_ptr->GetValue();
+          latch_.RUnlock();
+          return result;
         } else {
           *success = false;
+          latch_.RUnlock();
           return {};
         }
       }
@@ -460,6 +473,7 @@ class Trie {
       index++;
     }
     *success = false;
+    latch_.RUnlock();
     return {};
   }
 };
